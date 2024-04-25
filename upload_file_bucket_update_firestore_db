@@ -1,0 +1,77 @@
+ const { Storage } = require('@google-cloud/storage');
+const path = require('path');
+ const fs = require('fs');
+
+const storage = new Storage({
+    keyFilename: 'gcpkey.json',
+  });
+  const bucketName = 'bucket name';
+  const folderName = 'folder_name';
+
+
+  exports.getService = async (req, res, next) => {
+  
+ 
+    const files = fs.readdirSync('fecard');
+  
+    for(const file of files){
+        if (file.endsWith('.pdf')) {
+            const fileName = file.substring(0, file.lastIndexOf('.'));
+            const id = transformToIdFormat(fileName)
+            console.log(id,"id")
+            const subFolderName = fileName;
+            const newFileName = `${fileName}-RAHEJA-${generateRandomString()}.pdf`;
+            console.log(newFileName,"new")
+
+            const subFolderPath = path.join('fecard', subFolderName);
+            if (!fs.existsSync(subFolderPath)) {
+                fs.mkdirSync(subFolderPath);
+            }
+
+            await storage.bucket(bucketName).upload(path.join('fecard', file), {
+                destination: `${folderName}/${subFolderName}/${newFileName}`,
+            });
+
+            const [signedUrl] = await storage.bucket(bucketName).file(`${folderName}/${subFolderName}/${newFileName}`).getSignedUrl({
+                action: 'read',
+                expires: Date.now() + (1000 * 60 * 60 * 24 * 365 * 2500), 
+            });
+            const publicUrl = extractPublicUrl(signedUrl);
+
+            console.log(`https://storage.googleapis.com${publicUrl}`)
+
+            const db = getFirestore();
+            const serviceRef = db.collection('Insurance');
+            const querySnapshot = await serviceRef.where('id', '==', id).get();
+
+           
+        
+            querySnapshot.forEach(async (doc) => {
+              console.log("gg",doc.id,"uuu")
+                const docId = doc.id;
+                const links = doc.data().links || {};
+                links.rahejaEcard = `https://storage.googleapis.com${publicUrl}`;
+                const notifications = doc.data().notifications || {};
+                notifications.rahejaEcard = { link: `https://storage.googleapis.com${publicUrl}`, status: true }; 
+                await serviceRef.doc(docId).update({ links, notifications });
+                console.log("done for",docId)
+            });
+        }
+    }
+  
+
+  };
+
+  function transformToIdFormat(fileName) {
+    return fileName.replace(/(\d{4})(\d+)/, '$1-$2');
+}
+  
+
+  function generateRandomString() {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  }
+
+  function extractPublicUrl(signedUrl) {
+    const url = new URL(signedUrl);
+    return url.pathname;
+}
